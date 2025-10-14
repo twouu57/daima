@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# sing-box VLESS + Reality 一键安装脚本
+# sing-box VLESS + Reality 配置生成脚本
 # GitHub: https://github.com/your-username/singbox-reality
 
 set -e
@@ -16,17 +16,17 @@ NC='\033[0m' # No Color
 CONFIG_DIR="/etc/sing-box"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 SERVICE_FILE="/etc/systemd/system/sing-box.service"
-TEMP_DIR="/tmp/singbox-install"
+TEMP_DIR="/tmp/singbox-config"
 
 # 显示菜单
 show_menu() {
     echo -e "${GREEN}"
     echo "=========================================="
-    echo "    sing-box VLESS + Reality 一键脚本"
+    echo "    sing-box VLESS + Reality 配置生成脚本"
     echo "=========================================="
     echo -e "${NC}"
-    echo "1. 安装 VLESS + Reality"
-    echo "2. 卸载 VLESS + Reality"
+    echo "1. 生成 VLESS + Reality 配置"
+    echo "2. 删除配置和服务"
     echo "0. 退出脚本"
     echo
     read -p "请输入选择 [0-2]: " choice
@@ -50,77 +50,25 @@ check_root() {
     fi
 }
 
-# 安装依赖
-install_dependencies() {
-    echo -e "${YELLOW}安装系统依赖...${NC}"
-    if command -v apt-get &> /dev/null; then
-        apt-get update
-        apt-get install -y curl wget jq openssl
-    elif command -v yum &> /dev/null; then
-        yum install -y curl wget jq openssl
-    elif command -v dnf &> /dev/null; then
-        dnf install -y curl wget jq openssl
-    else
-        echo -e "${YELLOW}无法自动安装依赖，请手动安装 curl, wget, jq, openssl${NC}"
+# 检查 sing-box 是否安装
+check_singbox() {
+    if ! command -v sing-box &> /dev/null; then
+        echo -e "${RED}错误: 未找到 sing-box，请先安装 sing-box${NC}"
+        echo -e "${YELLOW}安装命令参考: curl -fsSL https://sing-box.app/install.sh | sh${NC}"
+        exit 1
     fi
-}
-
-# 安装 sing-box
-install_singbox() {
-    echo -e "${YELLOW}下载并安装 sing-box...${NC}"
-    
-    # 创建临时目录
-    mkdir -p $TEMP_DIR
-    cd $TEMP_DIR
-
-    # 获取最新版本
-    LATEST_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    
-    echo -e "${BLUE}检测到最新版本: $LATEST_VERSION${NC}"
-    
-    # 下载对应架构的二进制文件
-    ARCH=$(uname -m)
-    case $ARCH in
-        x86_64)
-            ARCH="amd64"
-            ;;
-        aarch64)
-            ARCH="arm64"
-            ;;
-        armv7l)
-            ARCH="armv7"
-            ;;
-        *)
-            echo -e "${RED}不支持的架构: $ARCH${NC}"
-            exit 1
-            ;;
-    esac
-
-    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-$LATEST_VERSION-linux-$ARCH.tar.gz"
-    
-    echo -e "${YELLOW}下载 sing-box...${NC}"
-    wget -O sing-box.tar.gz $DOWNLOAD_URL
-    
-    # 解压并安装
-    tar -xzf sing-box.tar.gz
-    cp sing-box-$LATEST_VERSION-linux-$ARCH/sing-box /usr/local/bin/
-    chmod +x /usr/local/bin/sing-box
-    
-    # 创建配置目录
-    mkdir -p $CONFIG_DIR
-    
-    echo -e "${GREEN}sing-box 安装完成${NC}"
+    echo -e "${GREEN}检测到 sing-box: $(sing-box version)${NC}"
 }
 
 # 生成配置参数
 generate_config() {
     # 生成 UUID
-    UUID=$(/usr/local/bin/sing-box generate uuid)
+    UUID=$(sing-box generate uuid)
     echo -e "${GREEN}生成的 UUID: $UUID${NC}"
     
     # 生成 Reality 密钥对
     echo -e "${YELLOW}生成 Reality 密钥对...${NC}"
-    KEYPAIR=$(/usr/local/bin/sing-box generate reality-keypair)
+    KEYPAIR=$(sing-box generate reality-keypair)
     PRIVATE_KEY=$(echo "$KEYPAIR" | grep 'PrivateKey:' | awk '{print $2}')
     PUBLIC_KEY=$(echo "$KEYPAIR" | grep 'PublicKey:' | awk '{print $2}')
     
@@ -139,7 +87,7 @@ generate_config() {
     LISTEN_PORT=${LISTEN_PORT:-"443"}
     
     # 获取服务器公网 IP
-    SERVER_IP=$(curl -s http://ipinfo.io/ip || curl -s http://ifconfig.me)
+    SERVER_IP=$(curl -s http://ipinfo.io/ip || curl -s http://ifconfig.me || hostname -I | awk '{print $1}')
     if [ -z "$SERVER_IP" ]; then
         SERVER_IP="你的服务器IP"
     fi
@@ -148,6 +96,9 @@ generate_config() {
 # 创建配置文件
 create_config_file() {
     echo -e "${YELLOW}创建配置文件...${NC}"
+    
+    # 创建配置目录
+    mkdir -p $CONFIG_DIR
     
     cat > $CONFIG_FILE << EOF
 {
@@ -257,6 +208,9 @@ show_client_config() {
     echo -e "公钥(Public Key): ${BLUE}$PUBLIC_KEY${NC}"
     echo -e "短ID(Short ID): ${BLUE}$SHORT_ID${NC}"
     echo -e "SNI/伪装域名: ${BLUE}$TLS_DOMAIN${NC}"
+    
+    # 创建临时目录
+    mkdir -p $TEMP_DIR
     
     # 根据选择显示不同格式的配置
     case $format_choice in
@@ -389,38 +343,47 @@ EOF
     echo -e "${YELLOW}2. 检查服务状态: systemctl status sing-box${NC}"
     echo -e "${YELLOW}3. 查看服务日志: journalctl -u sing-box -f${NC}"
     echo -e "${YELLOW}4. 防火墙请放行端口: $LISTEN_PORT${NC}"
+    echo -e "${YELLOW}5. 检查配置文件: sing-box check -c $CONFIG_FILE${NC}"
     
     echo
-    echo -e "${GREEN}✅ 安装完成!${NC}"
+    echo -e "${GREEN}✅ 配置生成完成!${NC}"
     echo -e "${YELLOW}请妥善保存上面的客户端配置信息${NC}"
 }
 
-# 安装 VLESS + Reality
-install_vless_reality() {
-    show_header "安装 VLESS + Reality"
+# 生成 VLESS + Reality 配置
+generate_vless_reality() {
+    show_header "生成 VLESS + Reality 配置"
     
     check_root
-    install_dependencies
-    install_singbox
+    check_singbox
     generate_config
     create_config_file
-    create_systemd_service
     
-    # 等待服务启动
-    sleep 3
+    # 检查是否要创建 systemd 服务
+    read -p "是否创建并启动 systemd 服务? [Y/n]: " create_service
+    create_service=${create_service:-"Y"}
+    
+    if [[ $create_service =~ [Yy] ]]; then
+        create_systemd_service
+        # 等待服务启动
+        sleep 3
+    else
+        echo -e "${YELLOW}跳过服务创建，请手动启动 sing-box${NC}"
+        echo -e "${YELLOW}启动命令: sing-box run -c $CONFIG_FILE${NC}"
+    fi
     
     show_client_config
     
     read -p "按回车键返回主菜单..."
 }
 
-# 卸载 VLESS + Reality
-uninstall_vless_reality() {
-    show_header "卸载 VLESS + Reality"
+# 删除配置和服务
+remove_config_service() {
+    show_header "删除 VLESS + Reality 配置"
     
-    read -p "确定要卸载 sing-box 吗？(y/N): " confirm
+    read -p "确定要删除 sing-box 配置和服务吗？(y/N): " confirm
     if [[ $confirm != [yY] ]]; then
-        echo "卸载已取消"
+        echo "删除已取消"
         return
     fi
     
@@ -428,15 +391,17 @@ uninstall_vless_reality() {
     systemctl stop sing-box 2>/dev/null || true
     systemctl disable sing-box 2>/dev/null || true
     
-    echo -e "${YELLOW}删除文件...${NC}"
-    rm -f /usr/local/bin/sing-box
+    echo -e "${YELLOW}删除配置文件...${NC}"
     rm -rf $CONFIG_DIR
+    
+    echo -e "${YELLOW}删除服务文件...${NC}"
     rm -f $SERVICE_FILE
     
     echo -e "${YELLOW}重新加载 systemd...${NC}"
     systemctl daemon-reload
     
-    echo -e "${GREEN}✅ 卸载完成!${NC}"
+    echo -e "${GREEN}✅ 配置和服务删除完成!${NC}"
+    echo -e "${YELLOW}注意: sing-box 二进制文件仍保留在系统中${NC}"
     
     read -p "按回车键返回主菜单..."
 }
@@ -447,10 +412,10 @@ main() {
         show_menu
         case $choice in
             1)
-                install_vless_reality
+                generate_vless_reality
                 ;;
             2)
-                uninstall_vless_reality
+                remove_config_service
                 ;;
             0)
                 echo -e "${GREEN}再见!${NC}"
@@ -465,10 +430,10 @@ main() {
 }
 
 # 脚本入口
-if [[ $1 == "--install" ]]; then
-    install_vless_reality
-elif [[ $1 == "--uninstall" ]]; then
-    uninstall_vless_reality
+if [[ $1 == "--generate" ]]; then
+    generate_vless_reality
+elif [[ $1 == "--remove" ]]; then
+    remove_config_service
 else
     main
 fi

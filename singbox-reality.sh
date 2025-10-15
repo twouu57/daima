@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Sing-box 一键安装管理脚本
-# #GitHub: https://github.com/your-username/singbox-manager
+# GitHub: https://github.com/your-username/singbox-manager
 
 set -e
 
